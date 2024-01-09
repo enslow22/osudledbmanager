@@ -7,7 +7,7 @@ from google_apis import create_service
 
 class YoutubeHandler:
 
-    def __int__(self):
+    def __init__(self):
         self.service = None
 
     def start_service(self):
@@ -47,8 +47,7 @@ class YoutubeHandler:
             'notifySubscribers': False
         }
 
-        video_file = 'danser/videos/%s' % filename
-        media_file = MediaFileUpload(video_file)
+        media_file = MediaFileUpload(filename)
 
         response_video_upload = self.service.videos().insert(
             part='snippet, status',
@@ -56,31 +55,5 @@ class YoutubeHandler:
             media_body=media_file
         ).execute()
         uploaded_video_id = response_video_upload.get('id')
-        print("%s uploaded to youtube at: %d" % (title, uploaded_video_id))
-
-
-        """
-        Step 3 (optional). Set video privacy status to "unlisted"
-        """
-        video_id = uploaded_video_id
-
-        counter = 0
-        response_update_video = self.service.videos().list(id=video_id, part='status').execute()
-        update_video_body = response_update_video['items'][0]
-
-        while 10 > counter:
-            if update_video_body['status']['uploadStatus'] == 'processed':
-                update_video_body['status']['privacyStatus'] = 'unlisted'
-                self.service.videos().update(
-                    part='status',
-                    body=update_video_body
-                ).execute()
-                print('Video {0} privacy status is updated to "{1}"'.format(update_video_body['id'], update_video_body['status']['privacyStatus']))
-                break
-            # adjust the duration based on your video size
-            time.sleep(10)
-            response_update_video = self.service.videos().list(id=video_id, part='status').execute()
-            update_video_body = response_update_video['items'][0]
-            counter += 1
-
-        return uploaded_video_id
+        print("%s uploaded to youtube at: https://youtu.be/%s" % (title, uploaded_video_id))
+        return 'https://youtu.be/'+uploaded_video_id

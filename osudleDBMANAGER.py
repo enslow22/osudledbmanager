@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, Column, String, Integer, Date, Float, BLOB, select, exists, URL, func
+from sqlalchemy.dialects.mysql import TINYINT
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 import ossapi
 import os
@@ -38,6 +39,7 @@ class osuMap(Base):
     mapper_country = Column(String(30))
     mapper_url = Column(String(60))
     mapper_avatar = Column(String(60))
+    gd = Column(TINYINT)
 
     # Media
     youtube_link_1 = Column(String(255))
@@ -47,7 +49,7 @@ class osuMap(Base):
     # Takes an osumap object and generates its videos into the videos folder
     def generate_media(self, number, start, length=15, music=False):
 
-        print("Media not found in cloud. Generating video number %s for: %s" % (str(number), str(self.title)))
+        print("Generating video number %s for: %s" % (str(number), str(self.title)))
 
         # Pick render settings
         settings = "HideBG"
@@ -58,7 +60,7 @@ class osuMap(Base):
         outfilename = "osudle! Day %d Video %d" % (self.MOTD, number)
         cwd = os.getcwd()
         danser_path = os.path.join(cwd, "danser")
-        temp_path = os.path.join(cwd, "danser", "videos", outfilename)
+        temp_path = os.path.join(cwd, "danser", "videos", outfilename+'.mp4')
 
         # Clear temp folder
         if os.path.exists(temp_path):
@@ -72,8 +74,8 @@ class osuMap(Base):
 
         if not os.path.exists(temp_path):
             print("Maybe map not downloaded")
-            clistring = 'danser-cli.exe -skip -t="%s" -settings="%s" -start="%d" -end="%d" -out="%s"' % (
-                self.title, settings, start, start + length, outfilename)
+            clistring = 'danser-cli.exe -skip -t="%s" -d="%s" -settings="%s" -start="%d" -end="%d" -out="%s"' % (
+                self.title, self.diff_name, settings, start, start + length, outfilename)
             subprocess.run(clistring, cwd=danser_path, shell=True, check=True, stdout=subprocess.DEVNULL)
 
     # Find videos in videos folder to upload to youtube
@@ -87,19 +89,19 @@ class osuMap(Base):
 
         if self.youtube_link_1 is None:
             title = "osudle! Day %d Video 1" % self.MOTD
-            filepath = os.path.join(videos_folder, title)
+            filepath = os.path.join(videos_folder, title+'.mp4')
             print('Uploading video 1')
             self.youtube_link_1 = uploader.upload_video(filepath, title)
 
         if self.youtube_link_2 is None:
             title = "osudle! Day %d Video 2" % self.MOTD
-            filepath = os.path.join(videos_folder, title)
+            filepath = os.path.join(videos_folder, title+'.mp4')
             print('Uploading video 2')
             self.youtube_link_2 = uploader.upload_video(filepath, title)
 
         if self.youtube_link_3 is None:
             title = "osudle! Day %d Video 3" % self.MOTD
-            filepath = os.path.join(videos_folder, title)
+            filepath = os.path.join(videos_folder, title+'.mp4')
             print('Uploading video 3')
             self.youtube_link_3 = uploader.upload_video(filepath, title)
 
@@ -113,10 +115,13 @@ class osuMap(Base):
         try:
             bmsinfo = api.beatmapset(beatmap_id=map_id)
             beatmap = api.beatmap(map_id)
-            mapper = api.user(bmsinfo.user_id)
-        except:
+            mapper = api.user(beatmap.user_id)
+        except Exception as e:
             print('something wrong with %d. GOOF LUCK' % map_id)
+            print(e)
             return
+
+        # If bmsinfo.user_id != beatmap.used_id, then the map is a gd
 
         # Identifiers
         self.map_id = map_id
@@ -135,7 +140,7 @@ class osuMap(Base):
         self.star_rating = beatmap.difficulty_rating
         self.diff_name = beatmap.version
         self.play_count = bmsinfo.play_count
-        self.background = bmsinfo.covers.card
+        self.background = bmsinfo.covers.cover_2x
         self.release_date = str(bmsinfo.submitted_date)
 
         # Mapper Info
@@ -144,6 +149,7 @@ class osuMap(Base):
         self.mapper_country = mapper.country.name
         self.mapper_url = "https://osu.ppy.sh/users/%s" % str(mapper.id)
         self.mapper_avatar = mapper.avatar_url
+        self.gd = not (bmsinfo.user_id == beatmap.user_id)
 
 def add_maps(maps):
 
@@ -155,7 +161,7 @@ def add_maps(maps):
         print()
         # Check to see if map is not in db
 
-        if map_in_db(map_id):
+        if get_map_in_db(map_id) is not None:
             print("%s already exists in database. Skipping" % str(map_id))
         else:
             print("Adding %s to database." % str(map_id))
@@ -168,18 +174,61 @@ def add_maps(maps):
 
 def add_new_MOTD(map_id, starting_points):
 
-    new_osu_map = osuMap(map_id, getNextDaily())
+    if len(starting_points) != 3:
+        print('Please provide 3 starting points')
+        return
+
+    # CHECK 2 THINGS
+    # IF MAP IS IN DB ALREADY AND IF IT IS A MOTD
+
+    # IF IT IS MOTD, return nothing
+    # IF IT IS IN THE DB BUT NOT MOTD, DELETE THE RECORD FROM DB
+
+    temp = get_map_in_db(map_id)
+    if temp is not None:
+        if temp.MOTD != -1:
+            print('%s is already a MOTD' % temp.title)
+        else:
+            ans = input('%s is already in the db. Overwrite? (y/n)' % temp.title)
+            if (ans == 'y'):
+                print('Okay, deleting..')
+                delete_map_from_db(map_id)
+            else:
+                print('Okay Aborting..')
+
+    next_daily = getNextDaily()
+    new_osu_map = osuMap(map_id, next_daily)
+
+    # Add confirmation here
+    print('Are you sure you want %s - [%s] to be map number %d? (y/n/m)' % (new_osu_map.title, new_osu_map.diff_name, next_daily))
+    check = input()
+    if (check not in ['y', 'm']):
+        return
 
     # Generate the videos for the object
     new_osu_map.generate_media(1, starting_points[0])
     new_osu_map.generate_media(2, starting_points[1])
     new_osu_map.generate_media(3, starting_points[2], music=True)
 
+    # Maybe add another check here?
+
+    if (check == 'm'):
+        if (input('Are the videos good to upload? (y/n)') != 'y'):
+            return
+
     #All videos should exist in danser/videos so we can upload them
     new_osu_map.upload_all_media()
-
     session.add(new_osu_map)
     session.commit()
+
+def generate_map_videos(map_id, starting_points):
+    if type(starting_points) is int:
+        starting_points = [starting_points]
+    map_data = session.get(osuMap, map_id)
+    for i, times in enumerate(starting_points):
+        map_data.generate_media(i+1, starting_points[i], music=(i == 2))
+
+    return
 
 # Returns the number corresponding to the next daily map
 def getNextDaily():
@@ -189,8 +238,26 @@ def getNextDaily():
     return max(list_of_dailies)+1 if a == [] else a[0]
 
 # See if map exists in db
-def map_in_db(map_id):
-    return session.query(exists().where(osuMap.map_id == map_id)).scalar()
+# Returns None if map dne
+def get_map_in_db(map_id):
+    map_record = session.query(osuMap).where(osuMap.map_id == map_id).scalar()
+    return map_record
+
+def delete_map_from_db(map_id):
+    map_record = get_map_in_db(map_id)
+    if map_record is not None:
+        session.delete(map_record)
+        session.commit()
+    else:
+        print('Tried to delete %d, but it is not in the database!' % map_id)
+
+# A good example of how to access the db using the SQLAlchemy
+def change_covers(map_id):
+    map_data = session.get(osuMap, map_id)
+    new_bg_link = map_data.background.replace("card", "cover@2x")
+    map_data.background = new_bg_link
+    session.commit()
+    return
 
 
 if __name__ == '__main__':
@@ -200,7 +267,10 @@ if __name__ == '__main__':
 
     Session = sessionmaker(bind=engine)
     session = Session()
+    #generate_map_videos(163054, [0, 122, 190])
+    add_new_MOTD(165325, [0, 43, 60])
+    #add_maps([2547713])
+    #a = get_map_in_db(1946507)
 
-    #add_maps([1629708], starting_points=[50, 70, 100], daily_map=True)
 
     print("Finished!")
